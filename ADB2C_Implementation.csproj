@@ -6,6 +6,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Compile Remove="frontend-nextjs\**" />
+    <Content Remove="frontend-nextjs\**" />
+    <EmbeddedResource Remove="frontend-nextjs\**" />
+    <None Remove="frontend-nextjs\**" />
+  </ItemGroup>
+
   <!--<ItemGroup>
     <Compile Remove="frontend\**" />
     <Content Remove="frontend\**" />
