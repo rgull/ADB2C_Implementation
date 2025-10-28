@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using ADB2C_Implementation.Data;
 using ADB2C_Implementation.Models;
@@ -7,6 +8,7 @@ namespace ADB2C_Implementation.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize]
     public class ProfileController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
