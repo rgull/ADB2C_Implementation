@@ -1,6 +1,5 @@
 using ADB2C_Implementation.Data;
 using ADB2C_Implementation.Models;
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
@@ -98,38 +97,28 @@ namespace ADB2C_Implementation.Controllers
                     return BadRequest("Failed to exchange code for tokens");
                 }
 
-                // Decode user info from profile_info first
-                var userInfo = DecodeProfileInfo(tokens.ProfileInfo);
+                // Decode user info from id_token
+                var userInfo = DecodeIdToken(tokens.AccessToken);
                 
-                // If profile_info is null, empty, or has no user data, try id_token
                 if (userInfo == null || string.IsNullOrEmpty(userInfo.Sub))
                 {
-                    _logger.LogWarning("profile_info has no user data, trying id_token");
-                    userInfo = DecodeIdToken(tokens.IdToken);
-                    
-                    // If id_token also fails, fallback to userinfo endpoint
-                    if (userInfo == null || string.IsNullOrEmpty(userInfo.Sub))
-                    {
-                        _logger.LogWarning("Failed to decode tokens, falling back to userinfo endpoint");
-                        userInfo = await GetUserInfo(tokens.AccessToken);
-                        if (userInfo == null)
-                        {
-                            return BadRequest("Failed to get user information");
-                        }
-                    }
+                    _logger.LogError("Failed to decode id_token and no user information available");
+                    return BadRequest("Failed to get user information from id_token");
                 }
 
                 // Save or update user in database
                 var user = await SaveOrUpdateUser(userInfo, tokens);
 
                 // Redirect to React frontend with success
-                return Redirect($"http://localhost:3000/auth/callback?userId={user.Id}&token={tokens.IdToken}&success=true");
+                var frontendRedirectUrl = _configuration["AzureAdB2C:FrontendRedirectUrl"];
+                return Redirect($"{frontendRedirectUrl}?userId={user.Id}&token={tokens.AccessToken}&success=true");
 
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing ADB2C redirect");
-                 return Redirect($"http://localhost:3000/auth/callback?error={ex.Message}&success=false");
+                var frontendRedirectUrl = _configuration["AzureAdB2C:FrontendRedirectUrl"];
+                return Redirect($"{frontendRedirectUrl}?error={ex.Message}&success=false");
             }
         }
 
@@ -210,13 +199,6 @@ namespace ADB2C_Implementation.Controllers
                 // Parse the JSON
                 var tokenData = JsonSerializer.Deserialize<JsonElement>(jsonString);
                 
-                // Log all available properties for debugging
-                _logger.LogInformation("Available properties in id_token:");
-                foreach (var prop in tokenData.EnumerateObject())
-                {
-                    _logger.LogInformation("  - {Name}: {Value}", prop.Name, prop.Value);
-                }
-                
                 var userInfo = new UserInfo
                 {
                     Sub = tokenData.TryGetProperty("sub", out var sub) ? sub.GetString() ?? "" : 
@@ -238,111 +220,6 @@ namespace ADB2C_Implementation.Controllers
                 return null;
             }
         }
-
-        private UserInfo? DecodeProfileInfo(string? profileInfo)
-        {
-            try
-            {
-                if (string.IsNullOrEmpty(profileInfo))
-                {
-                    _logger.LogWarning("Profile info is null or empty");
-                    return null;
-                }
-
-                // Handle JWT format (header.payload.signature)
-                string base64Payload;
-                if (profileInfo.Contains('.'))
-                {
-                    // This is a JWT, extract the payload (middle part)
-                    var parts = profileInfo.Split('.');
-                    if (parts.Length < 2)
-                    {
-                        _logger.LogError("Invalid JWT format in profile_info");
-                        return null;
-                    }
-                    base64Payload = parts[1];
-                    _logger.LogInformation("Extracted JWT payload");
-                }
-                else
-                {
-                    // Assume it's a direct base64 string
-                    base64Payload = profileInfo;
-                }
-
-                // Add padding if needed (Base64 strings should be divisible by 4)
-                base64Payload = base64Payload.PadRight(base64Payload.Length + (4 - base64Payload.Length % 4) % 4, '=');
-
-                // Decode the base64-encoded profile info
-                var decodedBytes = Convert.FromBase64String(base64Payload);
-                var jsonString = System.Text.Encoding.UTF8.GetString(decodedBytes);
-                
-                _logger.LogInformation("Decoded profile_info: {Json}", jsonString);
-                
-                // Parse the JSON to get user information
-                var profileData = JsonSerializer.Deserialize<JsonElement>(jsonString);
-                
-                // Log all available properties for debugging
-                _logger.LogInformation("Available properties in profile_info:");
-                foreach (var prop in profileData.EnumerateObject())
-                {
-                    _logger.LogInformation("  - {Name}: {Value}", prop.Name, prop.Value);
-                }
-                
-                var userInfo = new UserInfo
-                {
-                    Sub = profileData.TryGetProperty("sub", out var sub) ? sub.GetString() ?? "" : 
-                          profileData.TryGetProperty("oid", out var oid) ? oid.GetString() ?? "" : "",
-                    Email = profileData.TryGetProperty("email", out var email) ? email.GetString() : null,
-                    GivenName = profileData.TryGetProperty("given_name", out var givenName) ? givenName.GetString() : null,
-                    FamilyName = profileData.TryGetProperty("family_name", out var familyName) ? familyName.GetString() : null
-                };
-                
-                _logger.LogInformation("Extracted user info - Sub: {Sub}, Email: {Email}, GivenName: {GivenName}, FamilyName: {FamilyName}", 
-                    userInfo.Sub, userInfo.Email, userInfo.GivenName, userInfo.FamilyName);
-                
-                return userInfo;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error decoding profile info. ProfileInfo value: {ProfileInfo}", profileInfo);
-                return null;
-            }
-        }
-
-        private async Task<UserInfo?> GetUserInfo(string accessToken)
-        {
-            try
-            {
-                var adb2cConfig = _configuration.GetSection("AzureAdB2C");
-                var tenantName = adb2cConfig["Domain"]?.Split('.')[0];
-                var policyId = adb2cConfig["SignUpSignInPolicyId"];
-
-                var userInfoEndpoint = $"https://{tenantName}.b2clogin.com/{tenantName}.onmicrosoft.com/{policyId}/openid/v2.0/userinfo";
-
-                using var httpClient = new HttpClient();
-                httpClient.DefaultRequestHeaders.Authorization = 
-                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-
-                var response = await httpClient.GetAsync(userInfoEndpoint);
-                
-                if (response.IsSuccessStatusCode)
-                {
-                    var json = await response.Content.ReadAsStringAsync();
-                    _logger.LogInformation("User info JSON response: {Json}", json);
-                    return JsonSerializer.Deserialize<UserInfo>(json);
-                }
-
-                _logger.LogError("User info request failed: {StatusCode} - {Content}", 
-                    response.StatusCode, await response.Content.ReadAsStringAsync());
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error getting user info");
-                return null;
-            }
-        }
-
         private async Task<User> SaveOrUpdateUser(UserInfo userInfo, TokenResponse tokens)
         {
             try
@@ -355,7 +232,6 @@ namespace ADB2C_Implementation.Controllers
                 if (existingUser != null)
                 {
                     _logger.LogInformation("Updating existing user with Id: {UserId}", existingUser.Id);
-                    // Update existing user
                     
                     // Ensure PartitionKey is set and never changed
                     if (string.IsNullOrEmpty(existingUser.PartitionKey))
@@ -382,20 +258,19 @@ namespace ADB2C_Implementation.Controllers
                 else
                 {
                     _logger.LogInformation("Creating new user with ObjectId: {ObjectId}", userInfo.Sub);
-                    // Create new user
                     var newUser = new User
                     {
-                        Id = Guid.NewGuid().ToString(), // Explicitly set Id for Cosmos DB
+                        Id = Guid.NewGuid().ToString(),
                         ObjectId = userInfo.Sub,
                         Email = userInfo.Email,
                         FirstName = userInfo.GivenName,
                         LastName = userInfo.FamilyName,
-                        AccessToken = tokens.AccessToken ?? tokens.IdToken,
+                        AccessToken = tokens.AccessToken,
                         RefreshToken = tokens.RefreshToken,
-                        TokenExpiresAt = DateTime.UtcNow.AddSeconds(tokens.ExpiresIn ?? 3600), // Default to 1 hour if not provided
+                        TokenExpiresAt = DateTime.UtcNow.AddSeconds(tokens.ExpiresIn ?? 3600),
                         CreatedAt = DateTime.UtcNow,
                         UpdatedAt = DateTime.UtcNow,
-                        PartitionKey = "User" // Explicitly set partition key
+                        PartitionKey = "User"
                     };
 
                     _context.Users.Add(newUser);
@@ -416,35 +291,14 @@ namespace ADB2C_Implementation.Controllers
 
     public class TokenResponse
     {
-        [JsonPropertyName("access_token")]
-        public string? AccessToken { get; set; }
-
         [JsonPropertyName("id_token")]
-        public string? IdToken { get; set; }
+        public string? AccessToken { get; set; }
 
         [JsonPropertyName("refresh_token")]
         public string? RefreshToken { get; set; }
 
         [JsonPropertyName("expires_in")]
         public int? ExpiresIn { get; set; }
-
-        [JsonPropertyName("id_token_expires_in")]
-        public int? IdTokenExpiresIn { get; set; }
-
-        [JsonPropertyName("token_type")]
-        public string TokenType { get; set; } = string.Empty;
-
-        [JsonPropertyName("not_before")]
-        public long? NotBefore { get; set; }
-
-        [JsonPropertyName("profile_info")]
-        public string? ProfileInfo { get; set; }
-
-        [JsonPropertyName("scope")]
-        public string? Scope { get; set; }
-
-        [JsonPropertyName("refresh_token_expires_in")]
-        public int? RefreshTokenExpiresIn { get; set; }
     }
 
     public class UserInfo

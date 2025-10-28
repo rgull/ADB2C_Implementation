@@ -222,9 +222,10 @@ export default function ProfilePage() {
                   <input
                     type="email"
                     name="email"
+                    readOnly
+                    disabled
                     value={formData.email}
-                    onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-100 text-gray-600 cursor-not-allowed"
                   />
                 ) : (
                   <p className="text-gray-900">{user.email || 'Not provided'}</p>
@@ -290,50 +291,6 @@ export default function ProfilePage() {
                 )}
               </div>
 
-              {/* Metadata Section */}
-              <div className="md:col-span-2 mt-6 pt-6 border-t border-gray-200">
-                <h3 className="text-sm font-semibold text-gray-700 mb-4">System Information</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">
-                      User ID
-                    </label>
-                    <p className="text-sm text-gray-900 break-all font-mono">{user.id}</p>
-                  </div>
-                  {user.objectId && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-600 mb-1">
-                        Object ID
-                      </label>
-                      <p className="text-sm text-gray-900 break-all font-mono">{user.objectId}</p>
-                    </div>
-                  )}
-                  {user.createdAt && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-600 mb-1">
-                        Created At
-                      </label>
-                      <p className="text-sm text-gray-900">{new Date(user.createdAt).toLocaleString()}</p>
-                    </div>
-                  )}
-                  {user.updatedAt && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-600 mb-1">
-                        Updated At
-                      </label>
-                      <p className="text-sm text-gray-900">{new Date(user.updatedAt).toLocaleString()}</p>
-                    </div>
-                  )}
-                  {user.partitionKey && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-600 mb-1">
-                        Partition Key
-                      </label>
-                      <p className="text-sm text-gray-900">{user.partitionKey}</p>
-                    </div>
-                  )}
-                </div>
-              </div>
             </div>
 
             {/* Action Buttons */}
