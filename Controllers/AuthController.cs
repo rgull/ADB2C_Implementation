@@ -1,11 +1,8 @@
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
-using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.EntityFrameworkCore;
 using ADB2C_Implementation.Data;
 using ADB2C_Implementation.Models;
-using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -101,26 +98,40 @@ namespace ADB2C_Implementation.Controllers
                     return BadRequest("Failed to exchange code for tokens");
                 }
 
-                // Get user info from ADB2C
-                var userInfo = await GetUserInfo(tokens.AccessToken);
-                if (userInfo == null)
+                // Decode user info from profile_info first
+                var userInfo = DecodeProfileInfo(tokens.ProfileInfo);
+                
+                // If profile_info is null, empty, or has no user data, try id_token
+                if (userInfo == null || string.IsNullOrEmpty(userInfo.Sub))
                 {
-                    return BadRequest("Failed to get user information");
+                    _logger.LogWarning("profile_info has no user data, trying id_token");
+                    userInfo = DecodeIdToken(tokens.IdToken);
+                    
+                    // If id_token also fails, fallback to userinfo endpoint
+                    if (userInfo == null || string.IsNullOrEmpty(userInfo.Sub))
+                    {
+                        _logger.LogWarning("Failed to decode tokens, falling back to userinfo endpoint");
+                        userInfo = await GetUserInfo(tokens.AccessToken);
+                        if (userInfo == null)
+                        {
+                            return BadRequest("Failed to get user information");
+                        }
+                    }
                 }
 
                 // Save or update user in database
                 var user = await SaveOrUpdateUser(userInfo, tokens);
 
                 // Redirect to React frontend with success
-                return Redirect($"http://localhost:3000?userId={user.Id}&success=true");
+                return Redirect($"http://localhost:3000/auth/callback?userId={user.Id}&token={tokens.IdToken}&success=true");
+
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing ADB2C redirect");
-                return BadRequest("Error processing authentication");
+                 return Redirect($"http://localhost:3000/auth/callback?error={ex.Message}&success=false");
             }
         }
-
 
         private async Task<TokenResponse?> ExchangeCodeForTokens(string code)
         {
@@ -167,6 +178,137 @@ namespace ADB2C_Implementation.Controllers
             }
         }
 
+        private UserInfo? DecodeIdToken(string? idToken)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(idToken))
+                {
+                    _logger.LogWarning("Id token is null or empty");
+                    return null;
+                }
+
+                // Extract the payload (middle part of JWT)
+                var parts = idToken.Split('.');
+                if (parts.Length < 2)
+                {
+                    _logger.LogError("Invalid JWT format in id_token");
+                    return null;
+                }
+
+                var base64Payload = parts[1];
+                
+                // Add padding if needed
+                base64Payload = base64Payload.PadRight(base64Payload.Length + (4 - base64Payload.Length % 4) % 4, '=');
+
+                // Decode
+                var decodedBytes = Convert.FromBase64String(base64Payload);
+                var jsonString = System.Text.Encoding.UTF8.GetString(decodedBytes);
+                
+                _logger.LogInformation("Decoded id_token: {Json}", jsonString);
+                
+                // Parse the JSON
+                var tokenData = JsonSerializer.Deserialize<JsonElement>(jsonString);
+                
+                // Log all available properties for debugging
+                _logger.LogInformation("Available properties in id_token:");
+                foreach (var prop in tokenData.EnumerateObject())
+                {
+                    _logger.LogInformation("  - {Name}: {Value}", prop.Name, prop.Value);
+                }
+                
+                var userInfo = new UserInfo
+                {
+                    Sub = tokenData.TryGetProperty("sub", out var sub) ? sub.GetString() ?? "" : 
+                          tokenData.TryGetProperty("oid", out var oid) ? oid.GetString() ?? "" : "",
+                    Email = tokenData.TryGetProperty("email", out var email) ? email.GetString() : 
+                           tokenData.TryGetProperty("emails", out var emails) ? emails.EnumerateArray().FirstOrDefault().GetString() : null,
+                    GivenName = tokenData.TryGetProperty("given_name", out var givenName) ? givenName.GetString() : null,
+                    FamilyName = tokenData.TryGetProperty("family_name", out var familyName) ? familyName.GetString() : null
+                };
+                
+                _logger.LogInformation("Extracted user info from id_token - Sub: {Sub}, Email: {Email}, GivenName: {GivenName}, FamilyName: {FamilyName}", 
+                    userInfo.Sub, userInfo.Email, userInfo.GivenName, userInfo.FamilyName);
+                
+                return userInfo;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error decoding id token");
+                return null;
+            }
+        }
+
+        private UserInfo? DecodeProfileInfo(string? profileInfo)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(profileInfo))
+                {
+                    _logger.LogWarning("Profile info is null or empty");
+                    return null;
+                }
+
+                // Handle JWT format (header.payload.signature)
+                string base64Payload;
+                if (profileInfo.Contains('.'))
+                {
+                    // This is a JWT, extract the payload (middle part)
+                    var parts = profileInfo.Split('.');
+                    if (parts.Length < 2)
+                    {
+                        _logger.LogError("Invalid JWT format in profile_info");
+                        return null;
+                    }
+                    base64Payload = parts[1];
+                    _logger.LogInformation("Extracted JWT payload");
+                }
+                else
+                {
+                    // Assume it's a direct base64 string
+                    base64Payload = profileInfo;
+                }
+
+                // Add padding if needed (Base64 strings should be divisible by 4)
+                base64Payload = base64Payload.PadRight(base64Payload.Length + (4 - base64Payload.Length % 4) % 4, '=');
+
+                // Decode the base64-encoded profile info
+                var decodedBytes = Convert.FromBase64String(base64Payload);
+                var jsonString = System.Text.Encoding.UTF8.GetString(decodedBytes);
+                
+                _logger.LogInformation("Decoded profile_info: {Json}", jsonString);
+                
+                // Parse the JSON to get user information
+                var profileData = JsonSerializer.Deserialize<JsonElement>(jsonString);
+                
+                // Log all available properties for debugging
+                _logger.LogInformation("Available properties in profile_info:");
+                foreach (var prop in profileData.EnumerateObject())
+                {
+                    _logger.LogInformation("  - {Name}: {Value}", prop.Name, prop.Value);
+                }
+                
+                var userInfo = new UserInfo
+                {
+                    Sub = profileData.TryGetProperty("sub", out var sub) ? sub.GetString() ?? "" : 
+                          profileData.TryGetProperty("oid", out var oid) ? oid.GetString() ?? "" : "",
+                    Email = profileData.TryGetProperty("email", out var email) ? email.GetString() : null,
+                    GivenName = profileData.TryGetProperty("given_name", out var givenName) ? givenName.GetString() : null,
+                    FamilyName = profileData.TryGetProperty("family_name", out var familyName) ? familyName.GetString() : null
+                };
+                
+                _logger.LogInformation("Extracted user info - Sub: {Sub}, Email: {Email}, GivenName: {GivenName}, FamilyName: {FamilyName}", 
+                    userInfo.Sub, userInfo.Email, userInfo.GivenName, userInfo.FamilyName);
+                
+                return userInfo;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error decoding profile info. ProfileInfo value: {ProfileInfo}", profileInfo);
+                return null;
+            }
+        }
+
         private async Task<UserInfo?> GetUserInfo(string accessToken)
         {
             try
@@ -186,6 +328,7 @@ namespace ADB2C_Implementation.Controllers
                 if (response.IsSuccessStatusCode)
                 {
                     var json = await response.Content.ReadAsStringAsync();
+                    _logger.LogInformation("User info JSON response: {Json}", json);
                     return JsonSerializer.Deserialize<UserInfo>(json);
                 }
 
@@ -202,60 +345,106 @@ namespace ADB2C_Implementation.Controllers
 
         private async Task<User> SaveOrUpdateUser(UserInfo userInfo, TokenResponse tokens)
         {
-            var existingUser = await _context.Users
-                .FirstOrDefaultAsync(u => u.ObjectId == userInfo.Sub);
-
-            if (existingUser != null)
+            try
             {
-                // Update existing user
-                existingUser.Email = userInfo.Email;
-                existingUser.FirstName = userInfo.GivenName;
-                existingUser.LastName = userInfo.FamilyName;
-                existingUser.AccessToken = tokens.AccessToken;
-                existingUser.RefreshToken = tokens.RefreshToken;
-                existingUser.TokenExpiresAt = DateTime.UtcNow.AddSeconds(tokens.ExpiresIn);
-                existingUser.UpdatedAt = DateTime.UtcNow;
+                _logger.LogInformation("Saving/updating user with ObjectId: {ObjectId}, Email: {Email}", userInfo.Sub, userInfo.Email);
 
-                _context.Users.Update(existingUser);
-            }
-            else
-            {
-                // Create new user
-                var newUser = new User
+                var existingUser = await _context.Users
+                    .FirstOrDefaultAsync(u => u.ObjectId == userInfo.Sub);
+
+                if (existingUser != null)
                 {
-                    ObjectId = userInfo.Sub,
-                    Email = userInfo.Email,
-                    FirstName = userInfo.GivenName,
-                    LastName = userInfo.FamilyName,
-                    AccessToken = tokens.AccessToken,
-                    RefreshToken = tokens.RefreshToken,
-                    TokenExpiresAt = DateTime.UtcNow.AddSeconds(tokens.ExpiresIn),
-                    CreatedAt = DateTime.UtcNow,
-                    UpdatedAt = DateTime.UtcNow
-                };
+                    _logger.LogInformation("Updating existing user with Id: {UserId}", existingUser.Id);
+                    // Update existing user
+                    
+                    // Ensure PartitionKey is set and never changed
+                    if (string.IsNullOrEmpty(existingUser.PartitionKey))
+                    {
+                        existingUser.PartitionKey = "User";
+                    }
+                    
+                    existingUser.Email = userInfo.Email;
+                    existingUser.FirstName = userInfo.GivenName;
+                    existingUser.LastName = userInfo.FamilyName;
+                    existingUser.AccessToken = tokens.AccessToken;
+                    existingUser.RefreshToken = tokens.RefreshToken;
+                    existingUser.TokenExpiresAt = DateTime.UtcNow.AddSeconds(tokens.ExpiresIn ?? 3600); // Default to 1 hour if not provided
+                    existingUser.UpdatedAt = DateTime.UtcNow;
 
-                _context.Users.Add(newUser);
-                existingUser = newUser;
+                    // Use Attach to ensure proper update tracking in Cosmos DB
+                    var entry = _context.Entry(existingUser);
+                    if (entry.State == EntityState.Detached)
+                    {
+                        _context.Attach(existingUser);
+                    }
+                    entry.State = EntityState.Modified;
+                }
+                else
+                {
+                    _logger.LogInformation("Creating new user with ObjectId: {ObjectId}", userInfo.Sub);
+                    // Create new user
+                    var newUser = new User
+                    {
+                        Id = Guid.NewGuid().ToString(), // Explicitly set Id for Cosmos DB
+                        ObjectId = userInfo.Sub,
+                        Email = userInfo.Email,
+                        FirstName = userInfo.GivenName,
+                        LastName = userInfo.FamilyName,
+                        AccessToken = tokens.AccessToken ?? tokens.IdToken,
+                        RefreshToken = tokens.RefreshToken,
+                        TokenExpiresAt = DateTime.UtcNow.AddSeconds(tokens.ExpiresIn ?? 3600), // Default to 1 hour if not provided
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow,
+                        PartitionKey = "User" // Explicitly set partition key
+                    };
+
+                    _context.Users.Add(newUser);
+                    existingUser = newUser;
+                }
+
+                await _context.SaveChangesAsync();
+                _logger.LogInformation("Successfully saved user with Id: {UserId}", existingUser.Id);
+                return existingUser;
             }
-
-            await _context.SaveChangesAsync();
-            return existingUser;
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error saving user to database. UserInfo.Sub: {Sub}, Email: {Email}", userInfo.Sub, userInfo.Email);
+                throw; // Re-throw to be caught by the caller
+            }
         }
     }
 
     public class TokenResponse
     {
         [JsonPropertyName("access_token")]
-        public string AccessToken { get; set; } = string.Empty;
+        public string? AccessToken { get; set; }
+
+        [JsonPropertyName("id_token")]
+        public string? IdToken { get; set; }
 
         [JsonPropertyName("refresh_token")]
         public string? RefreshToken { get; set; }
 
         [JsonPropertyName("expires_in")]
-        public int ExpiresIn { get; set; }
+        public int? ExpiresIn { get; set; }
+
+        [JsonPropertyName("id_token_expires_in")]
+        public int? IdTokenExpiresIn { get; set; }
 
         [JsonPropertyName("token_type")]
         public string TokenType { get; set; } = string.Empty;
+
+        [JsonPropertyName("not_before")]
+        public long? NotBefore { get; set; }
+
+        [JsonPropertyName("profile_info")]
+        public string? ProfileInfo { get; set; }
+
+        [JsonPropertyName("scope")]
+        public string? Scope { get; set; }
+
+        [JsonPropertyName("refresh_token_expires_in")]
+        public int? RefreshTokenExpiresIn { get; set; }
     }
 
     public class UserInfo

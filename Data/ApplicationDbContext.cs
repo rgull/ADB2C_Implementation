@@ -19,12 +19,13 @@ namespace ADB2C_Implementation.Data
             modelBuilder.Entity<User>(entity =>
             {
                 entity.HasKey(e => e.Id);
-                entity.HasPartitionKey(e => e.PartitionKey);
-                entity.ToContainer("Users");
+                // Use Id as the partition key to match existing Cosmos DB container
+                // Note: The existing 'profiles' container was created with partition key path 'id'
+                entity.HasPartitionKey(e => e.Id);
+                entity.ToContainer("profiles");
                 
-                // Configure unique constraints
-                entity.HasIndex(e => e.ObjectId).IsUnique();
-                entity.HasIndex(e => e.Email).IsUnique();
+                // The PartitionKey property in the User model is just metadata
+                // The actual partition key for Cosmos DB operations is the Id field
             });
         }
     }

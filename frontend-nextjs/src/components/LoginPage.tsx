@@ -1,11 +1,16 @@
 'use client'
 
+import { useRouter } from 'next/navigation'
 import { authService } from '@/services/apiService'
 import AddUserForm from './AddUserForm'
 
 export default function LoginPage() {
+  const router = useRouter()
+  
   const handleLogin = () => {
-    authService.login()
+    authService.login();
+    // Navigate to profile page to view user information
+    //router.push('/profile')
   }
 
   return (
@@ -41,11 +46,17 @@ export default function LoginPage() {
               </button>
             </div>
             
-            <div className="text-center">
-              <p className="text-xs text-gray-500">
+            {/* <div className="text-center">
+              <p className="text-xs text-gray-500 mb-4">
                 Secure authentication powered by Microsoft Azure AD B2C
               </p>
-            </div>
+              <a
+                href="/user-display"
+                className="text-blue-600 hover:text-blue-800 text-sm underline"
+              >
+                View Demo User Profile
+              </a>
+            </div> */}
           </div>
         </div>
       </div>

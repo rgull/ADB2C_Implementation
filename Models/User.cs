@@ -11,11 +11,19 @@ namespace ADB2C_Implementation.Models
         [Required]
         public string ObjectId { get; set; } = string.Empty; // UUID from ADB2C
         
+        public string? Username { get; set; }
+        
         public string? Email { get; set; }
         
         public string? FirstName { get; set; }
         
         public string? LastName { get; set; }
+        
+        public string? Number { get; set; }
+        
+        public string? Gender { get; set; }
+        
+        public string? Address { get; set; }
         
         public string? AccessToken { get; set; }
         
@@ -27,7 +35,8 @@ namespace ADB2C_Implementation.Models
         
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
         
-        // Cosmos DB partition key
+        // Cosmos DB partition key - must be set and never changed
+        [Required]
         public string PartitionKey { get; set; } = "User";
     }
 }
