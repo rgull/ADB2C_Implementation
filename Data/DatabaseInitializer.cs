@@ -1,6 +1,6 @@
 using ADB2C_Implementation.Data;
 
-namespace ADB2C_Implementation
+namespace ADB2C_Implementation.Data
 {
     public static class DatabaseInitializer
     {
@@ -25,3 +25,4 @@ namespace ADB2C_Implementation
         }
     }
 }
+

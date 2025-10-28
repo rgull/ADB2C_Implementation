@@ -1,6 +1,9 @@
 
 using ADB2C_Implementation;
 using ADB2C_Implementation.Data;
+using ADB2C_Implementation.Middleware;
+using ADB2C_Implementation.Services;
+using ADB2C_Implementation.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
@@ -21,6 +24,10 @@ namespace ADB2C_Implementation
                     builder.Configuration.GetConnectionString("CosmosDb:AccountEndpoint")!,
                     builder.Configuration.GetConnectionString("CosmosDb:AccountKey")!,
                     builder.Configuration.GetConnectionString("CosmosDb:DatabaseName")!));
+
+            // Register services
+            builder.Services.AddScoped<IAuthService, AuthService>();
+            builder.Services.AddScoped<IProfileService, ProfileService>();
 
             builder.Services.AddControllers();
             // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
@@ -107,6 +114,9 @@ namespace ADB2C_Implementation
                 });
             });
 
+            // Add HttpContextAccessor for session access in services
+            builder.Services.AddHttpContextAccessor();
+
             var app = builder.Build();
 
             // Configure the HTTP request pipeline.
@@ -117,6 +127,10 @@ namespace ADB2C_Implementation
             }
 
             app.UseHttpsRedirection();
+            
+            // Add exception handling middleware
+            app.UseMiddleware<ExceptionHandlingMiddleware>();
+            
             app.UseCors("ReactApp");
             app.UseSession();
             app.UseAuthentication();
